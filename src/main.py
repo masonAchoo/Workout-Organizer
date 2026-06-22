@@ -109,6 +109,36 @@ def choose_exercise(exercises: list[dict]) -> dict | None:
     return exercises[choice]
 
 
+def view_workout(workout: dict, exercises: list[dict]) -> None:
+    print(f"\nWorkout: {workout['name']}")
+    print(f"Sets: {workout.get('sets', 1)}")
+    if not workout.get("exercises"):
+        print("No exercises in this workout.\n")
+        return
+
+    print("Exercises:")
+    for item in workout["exercises"]:
+        exercise_name = item["exercise_name"]
+        kind = item["kind"]
+        count = item["count"]
+        double_sided = bool(item.get("isDoubleSided", False))
+        side_label = "double-sided" if double_sided else "single-sided"
+        image = next(
+            (exercise.get("image") for exercise in exercises if exercise["name"] == exercise_name),
+            None,
+        )
+        print(f"- {exercise_name}: {count} {kind} ({side_label})")
+        if image:
+            print(f"  Image: {image}")
+    print()
+
+
+def view_exercise(exercise: dict) -> None:
+    print(f"\nExercise: {exercise['name']}")
+    print(f"Image: {exercise.get('image') or 'None'}")
+    print(f"Double-sided: {'Yes' if exercise.get('isDoubleSided', False) else 'No'}\n")
+
+
 def select_workout_flow(workouts: list[dict], exercises: list[dict]) -> None:
     if not workouts:
         create = questionary.select(
@@ -134,9 +164,11 @@ def select_workout_flow(workouts: list[dict], exercises: list[dict]) -> None:
     workout = workouts[choice]
     action = questionary.select(
         f"What would you like to do with '{workout['name']}'?",
-        choices=["Run workout", "Edit workout", "Delete workout", "Back"],
+        choices=["Run workout", "View workout", "Edit workout", "Delete workout", "Back"],
     ).ask()
     if action == "Run workout":
+        view_workout(workout, exercises)
+    elif action == "View workout":
         execute_workout(workout, exercises)
     elif action == "Edit workout":
         edit_workout(workouts, exercises, selected_index=choice)
@@ -167,14 +199,13 @@ def select_exercise_flow(exercises: list[dict]) -> None:
         return
 
     exercise = exercises[choice]
-    print(f"\nExercise: {exercise['name']}")
-    print(f"Image: {exercise.get('image') or 'None'}\n")
-
     action = questionary.select(
         f"What would you like to do with '{exercise['name']}'?",
-        choices=["Edit exercise", "Delete exercise", "Back"],
+        choices=["View exercise", "Edit exercise", "Delete exercise", "Back"],
     ).ask()
-    if action == "Edit exercise":
+    if action == "View exercise":
+        view_exercise(exercise)
+    elif action == "Edit exercise":
         edit_exercise(exercises, selected_index=choice)
     elif action == "Delete exercise":
         delete_exercise(exercises, selected_index=choice)
@@ -226,7 +257,24 @@ def execute_workout(workout: dict, exercises: list[dict]) -> None:
             if matched:
                 display_exercise_image(matched.get("image"))
 
-            if kind == "seconds":
+            is_double_sided = bool(
+                matched.get("isDoubleSided", False)
+                if matched
+                else exercise.get("isDoubleSided", False)
+            )
+            if is_double_sided:
+                print(f"Left side: {count} {when_text}")
+                if kind == "seconds":
+                    run_timer(count)
+                else:
+                    input("Press Enter to continue to the right side...")
+
+                print(f"Right side: {count} {when_text}")
+                if kind == "seconds":
+                    run_timer(count)
+                else:
+                    input("Press Enter to continue to the next exercise...")
+            elif kind == "seconds":
                 run_timer(count)
             else:
                 input("Press Enter to continue to the next exercise...")
@@ -269,6 +317,7 @@ def add_workout(workouts: list[dict], exercises: list[dict]) -> None:
                 "exercise_name": exercise["name"],
                 "kind": kind.lower(),
                 "count": count,
+                "isDoubleSided": bool(exercise.get("isDoubleSided", False)),
             }
         )
 
@@ -314,10 +363,18 @@ def add_exercise(exercises: list[dict]) -> None:
     if image is None:
         return
 
+    is_double_sided = questionary.confirm(
+        "Is this exercise double-sided (left and right)?",
+        default=False,
+    ).ask()
+    if is_double_sided is None:
+        return
+
     exercises.append(
         {
             "name": exercise_name,
             "image": image.strip() or None,
+            "isDoubleSided": bool(is_double_sided),
         }
     )
     save_json(EXERCISES_FILE, exercises)
@@ -339,54 +396,144 @@ def edit_workout(workouts: list[dict], exercises: list[dict], selected_index: in
         selected_index = choice
 
     workout = workouts[selected_index]
-    workout_name = prompt_unique_name(
-        "Workout name:",
-        {w["name"].lower() for w in workouts},
-        current_name=workout["name"],
-    )
-    if not workout_name:
-        print("Workout edit canceled.")
-        return
 
-    workout["name"] = workout_name
-    workout["sets"] = prompt_positive_int(
-        "How many sets should this workout have?",
-        default=workout.get("sets", 1),
-    ) or workout["sets"]
+    while True:
+        action = questionary.select(
+            f"What would you like to modify for '{workout['name']}'?",
+            choices=[
+                questionary.Choice("Workout name", value="name"),
+                questionary.Choice("Number of sets", value="sets"),
+                questionary.Choice("Exercises", value="exercises"),
+                questionary.Choice("Done", value="done"),
+                questionary.Choice("Cancel", value=None),
+            ],
+        ).ask()
+        if action is None:
+            print("Workout edit canceled.")
+            return
+        if action == "done":
+            break
 
-    if questionary.confirm("Modify exercises in this workout?", default=False).ask():
-        selected_exercises: list[dict] = []
-        while True:
-            exercise = choose_exercise(exercises)
-            if exercise is None:
-                return
-
-            kind = questionary.select(
-                "Choose the measurement type:",
-                choices=["Reps", "Seconds"],
-            ).ask()
-
-            count = prompt_positive_int(f"How many {kind.lower()}?", default=10)
-            if count is None:
-                return
-
-            selected_exercises.append(
-                {
-                    "exercise_name": exercise["name"],
-                    "kind": kind.lower(),
-                    "count": count,
-                }
+        if action == "name":
+            new_name = prompt_unique_name(
+                "Workout name:",
+                {w["name"].lower() for w in workouts},
+                current_name=workout["name"],
             )
+            if new_name:
+                workout["name"] = new_name
 
-            keep_adding = questionary.confirm("Add another exercise to this workout?", default=True).ask()
-            if not keep_adding:
-                break
+        elif action == "sets":
+            new_sets = prompt_positive_int(
+                "How many sets should this workout have?",
+                default=workout.get("sets", 1),
+            )
+            if new_sets is not None:
+                workout["sets"] = new_sets
 
-        if selected_exercises:
-            workout["exercises"] = selected_exercises
+        elif action == "exercises":
+            while True:
+                exercise_action = questionary.select(
+                    "Modify exercises in this workout:",
+                    choices=[
+                        questionary.Choice("Add exercise", value="add"),
+                        questionary.Choice("Delete exercise", value="delete"),
+                        questionary.Choice("Edit reps/timer", value="edit"),
+                        questionary.Choice("Back", value="back"),
+                    ],
+                ).ask()
+                if exercise_action is None or exercise_action == "back":
+                    break
+
+                if exercise_action == "add":
+                    exercise = choose_exercise(exercises)
+                    if exercise is None:
+                        continue
+
+                    kind = questionary.select(
+                        "Choose the measurement type:",
+                        choices=["Reps", "Seconds"],
+                    ).ask()
+                    if kind is None:
+                        continue
+
+                    count = prompt_positive_int(f"How many {kind.lower()}?", default=10)
+                    if count is None:
+                        continue
+
+                    workout["exercises"].append(
+                        {
+                            "exercise_name": exercise["name"],
+                            "kind": kind.lower(),
+                            "count": count,
+                            "isDoubleSided": bool(exercise.get("isDoubleSided", False)),
+                        }
+                    )
+
+                elif exercise_action == "delete":
+                    if not workout["exercises"]:
+                        print("No exercises to delete from this workout.")
+                        continue
+
+                    exercise_choices = [
+                        questionary.Choice(
+                            f"{item['exercise_name']} ({item['kind']}, {item['count']})",
+                            value=i,
+                        )
+                        for i, item in enumerate(workout["exercises"])
+                    ]
+                    choice = questionary.select(
+                        "Choose an exercise to delete:",
+                        choices=exercise_choices,
+                    ).ask()
+                    if choice is not None:
+                        del workout["exercises"][choice]
+
+                elif exercise_action == "edit":
+                    if not workout["exercises"]:
+                        print("No exercises to edit in this workout.")
+                        continue
+
+                    exercise_choices = [
+                        questionary.Choice(
+                            f"{item['exercise_name']} ({item['kind']}, {item['count']})",
+                            value=i,
+                        )
+                        for i, item in enumerate(workout["exercises"])
+                    ]
+                    choice = questionary.select(
+                        "Choose an exercise to edit:",
+                        choices=exercise_choices,
+                    ).ask()
+                    if choice is None:
+                        continue
+
+                    workout_item = workout["exercises"][choice]
+                    kind = questionary.select(
+                        "Choose the measurement type:",
+                        choices=["Reps", "Seconds"],
+                        default=workout_item["kind"].capitalize(),
+                    ).ask()
+                    if kind is None:
+                        continue
+
+                    count = prompt_positive_int(
+                        f"How many {kind.lower()}?",
+                        default=workout_item.get("count", 10),
+                    )
+                    if count is None:
+                        continue
+
+                    workout_item["kind"] = kind.lower()
+                    workout_item["count"] = count
+                    matched_exercise = next(
+                        (item for item in exercises if item["name"] == workout_item["exercise_name"]),
+                        None,
+                    )
+                    workout_item["isDoubleSided"] = bool(matched_exercise.get("isDoubleSided", False)) if matched_exercise else bool(workout_item.get("isDoubleSided", False))
 
     save_json(WORKOUTS_FILE, workouts)
-    print(f"Workout '{workout_name}' updated.\n")
+    print(f"Workout '{workout['name']}' updated.\n")
 
 
 def delete_workout(workouts: list[dict], selected_index: int | None = None) -> None:
@@ -440,27 +587,48 @@ def edit_exercise(exercises: list[dict], selected_index: int | None = None) -> N
         selected_index = choice
 
     exercise = exercises[selected_index]
-    exercise_name = prompt_unique_name(
-        "Exercise name:",
-        {e["name"].lower() for e in exercises},
-        current_name=exercise["name"],
-    )
-    if not exercise_name:
+    action = questionary.select(
+        "Modify exercise:",
+        choices=[
+            questionary.Choice("Name", value="name"),
+            questionary.Choice("Image", value="image"),
+            questionary.Choice("Double-sided flag", value="isDoubleSided"),
+            questionary.Choice("Cancel", value=None),
+        ],
+    ).ask()
+    if action is None:
         print("Exercise edit canceled.")
         return
 
-    exercise["name"] = exercise_name
+    if action == "name":
+        new_name = prompt_unique_name(
+            "Exercise name:",
+            {e["name"].lower() for e in exercises},
+            current_name=exercise["name"],
+        )
+        if new_name:
+            exercise["name"] = new_name
+    elif action == "image":
+        image = questionary.text(
+            "Optional image path or URL (leave blank if none):",
+            default=exercise.get("image") or "",
+        ).ask()
+        if image is None:
+            print("Exercise edit canceled.")
+            return
+        exercise["image"] = image.strip() or None
+    elif action == "isDoubleSided":
+        is_double_sided = questionary.confirm(
+            "Is this exercise double-sided (left and right)?",
+            default=bool(exercise.get("isDoubleSided", False)),
+        ).ask()
+        if is_double_sided is None:
+            print("Exercise edit canceled.")
+            return
+        exercise["isDoubleSided"] = bool(is_double_sided)
 
-    image = questionary.text(
-        "Optional image path or URL (leave blank if none):",
-        default=exercise.get("image") or "",
-    ).ask()
-    if image is None:
-        return
-
-    exercise["image"] = image.strip() or None
     save_json(EXERCISES_FILE, exercises)
-    print(f"Exercise '{exercise_name}' updated.\n")
+    print(f"Exercise '{exercise['name']}' updated.\n")
 
 
 def main() -> None:
