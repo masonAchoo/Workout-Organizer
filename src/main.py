@@ -167,9 +167,9 @@ def select_workout_flow(workouts: list[dict], exercises: list[dict]) -> None:
         choices=["Run workout", "View workout", "Edit workout", "Delete workout", "Back"],
     ).ask()
     if action == "Run workout":
-        view_workout(workout, exercises)
-    elif action == "View workout":
         execute_workout(workout, exercises)
+    elif action == "View workout":
+        view_workout(workout, exercises)
     elif action == "Edit workout":
         edit_workout(workouts, exercises, selected_index=choice)
     elif action == "Delete workout":
